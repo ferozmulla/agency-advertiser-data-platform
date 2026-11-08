@@ -1,0 +1,71 @@
+main:
+  params: [args]
+  steps:
+    - init_defaults:
+        assign:
+          - admin_project_id: ${sys.get_env("GOOGLE_CLOUD_PROJECT_ID")}
+          - region: "us-central1"
+          - dataform_repo_id: "medallion-pipeline"
+          - dataform_workspace_id: "default"
+          - child_workflow_id: "medallion-tenant-child-workflow"
+          - parent_execution_id: ${sys.get_env("GOOGLE_CLOUD_WORKFLOW_EXECUTION_ID")}
+          - tenant_list: []
+          - tenant_outcomes: {}
+
+    - query_active_tenants:
+        call: googleapis.bigquery.v2.jobs.query
+        args:
+          projectId: ${admin_project_id}
+          body:
+            useLegacySql: false
+            query: ${"SELECT tenant_id, project_id, tenant_name, service_account_email, landing_bucket, biglake_connection_id FROM `" + admin_project_id + ".platform_admin.tenants` WHERE is_active = TRUE ORDER BY tenant_id"}
+        result: bq_res
+
+    - parse_tenant_rows:
+        for:
+          value: row
+          in: ${default(map.get(bq_res, "rows"), [])}
+          steps:
+            - append_tenant:
+                assign:
+                  - tenant_obj:
+                      tenant_id: ${row.f[0].v}
+                      project_id: ${row.f[1].v}
+                      tenant_name: ${row.f[2].v}
+                      service_account_email: ${row.f[3].v}
+                      landing_bucket: ${row.f[4].v}
+                      biglake_connection_id: ${row.f[5].v}
+                  - tenant_list: ${list.concat(tenant_list, tenant_obj)}
+
+    - fan_out_tenants:
+        parallel:
+          shared: [tenant_outcomes]
+          for:
+            value: tenant_item
+            in: ${tenant_list}
+            steps:
+              - run_child_workflow:
+                  call: googleapis.workflowexecutions.v1.projects.locations.workflows.executions.run
+                  args:
+                    workflow_id: ${child_workflow_id}
+                    location: ${region}
+                    project_id: ${admin_project_id}
+                    connector_params:
+                      timeout: 1800
+                    argument:
+                      admin_project_id: ${admin_project_id}
+                      region: ${region}
+                      dataform_repo_id: ${dataform_repo_id}
+                      dataform_workspace_id: ${dataform_workspace_id}
+                      parent_execution_id: ${parent_execution_id}
+                      tenant: ${tenant_item}
+                  result: child_res
+              - record_outcome:
+                  assign:
+                    - tenant_outcomes[tenant_item.tenant_id]: ${child_res}
+
+    - return_summary:
+        return:
+          parent_execution_id: ${parent_execution_id}
+          tenants_processed: ${len(tenant_list)}
+          outcomes: ${tenant_outcomes}

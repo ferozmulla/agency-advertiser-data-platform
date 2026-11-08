@@ -1,0 +1,137 @@
+main:
+  params: [args]
+  steps:
+    - init_vars:
+        assign:
+          - admin_project_id: ${args.admin_project_id}
+          - region: ${args.region}
+          - dataform_repo_id: ${args.dataform_repo_id}
+          - dataform_workspace_id: ${args.dataform_workspace_id}
+          - parent_execution_id: ${args.parent_execution_id}
+          - tenant: ${args.tenant}
+          - tenant_id: ${tenant.tenant_id}
+          - tenant_project_id: ${tenant.project_id}
+          - tenant_sa: ${tenant.service_account_email}
+          - landing_bucket: ${tenant.landing_bucket}
+          - biglake_connection_id: ${tenant.biglake_connection_id}
+          - run_id: ${sys.get_env("GOOGLE_CLOUD_WORKFLOW_EXECUTION_ID")}
+          - repo_base_url: ${"https://dataform.googleapis.com/v1beta1/projects/" + admin_project_id + "/locations/" + region + "/repositories/" + dataform_repo_id}
+          - workspace_path: ${"projects/" + admin_project_id + "/locations/" + region + "/repositories/" + dataform_repo_id + "/workspaces/" + dataform_workspace_id}
+          - compilation_name: "NONE"
+          - invocation_name: "NONE"
+
+    - log_run_start:
+        call: googleapis.bigquery.v2.jobs.query
+        args:
+          projectId: ${admin_project_id}
+          body:
+            useLegacySql: false
+            query: ${"INSERT INTO `" + admin_project_id + ".platform_admin.run_log` (run_id, parent_execution_id, tenant_id, project_id, status, dataform_compilation_id, dataform_invocation_id, started_at, completed_at, notes) VALUES ('" + run_id + "', '" + parent_execution_id + "', '" + tenant_id + "', '" + tenant_project_id + "', 'RUNNING', NULL, NULL, CURRENT_TIMESTAMP(), NULL, 'Started per-tenant child workflow')"}
+        result: log_start_res
+
+    - execute_pipeline:
+        try:
+          steps:
+            - compile_dataform:
+                call: http.post
+                args:
+                  url: ${repo_base_url + "/compilationResults"}
+                  auth:
+                    type: OAuth2
+                  body:
+                    workspace: ${workspace_path}
+                    codeCompilationConfig:
+                      defaultDatabase: ${tenant_project_id}
+                      defaultSchema: "silver"
+                      assertionSchema: "silver"
+                      vars:
+                        tenant_id: ${tenant_id}
+                        landing_bucket: ${landing_bucket}
+                        biglake_connection: ${biglake_connection_id}
+                result: compile_res
+
+            - save_compilation:
+                assign:
+                  - compilation_name: ${compile_res.body.name}
+
+            - invoke_dataform:
+                call: http.post
+                args:
+                  url: ${repo_base_url + "/workflowInvocations"}
+                  auth:
+                    type: OAuth2
+                  body:
+                    compilationResult: ${compilation_name}
+                    invocationConfig:
+                      serviceAccount: ${tenant_sa}
+                      transitiveDependenciesIncluded: true
+                      transitiveDependentsIncluded: true
+                result: invoke_res
+
+            - save_invocation:
+                assign:
+                  - invocation_name: ${invoke_res.body.name}
+                  - invocation_state: ${default(map.get(invoke_res.body, "state"), "RUNNING")}
+
+            - poll_loop:
+                switch:
+                  - condition: ${invocation_state == "RUNNING" or invocation_state == "CANCELING"}
+                    steps:
+                      - wait_5s:
+                          call: sys.sleep
+                          args:
+                            seconds: 5
+                      - check_status:
+                          call: http.get
+                          args:
+                            url: ${"https://dataform.googleapis.com/v1beta1/" + invocation_name}
+                            auth:
+                              type: OAuth2
+                          result: status_res
+                      - update_state:
+                          assign:
+                            - invocation_state: ${status_res.body.state}
+                          next: poll_loop
+                  - condition: ${invocation_state == "SUCCEEDED"}
+                    next: log_run_success
+                next: raise_invocation_failure
+
+            - raise_invocation_failure:
+                raise: '${"Dataform invocation ended in state: " + invocation_state}'
+
+            - log_run_success:
+                call: googleapis.bigquery.v2.jobs.query
+                args:
+                  projectId: ${admin_project_id}
+                  body:
+                    useLegacySql: false
+                    query: ${"UPDATE `" + admin_project_id + ".platform_admin.run_log` SET status = 'SUCCEEDED', dataform_compilation_id = '" + compilation_name + "', dataform_invocation_id = '" + invocation_name + "', completed_at = CURRENT_TIMESTAMP(), notes = 'Medallion Bronze->Silver->Gold+Iceberg pipeline succeeded' WHERE run_id = '" + run_id + "'"}
+                result: log_success_res
+
+            - return_success:
+                return:
+                  run_id: ${run_id}
+                  tenant_id: ${tenant_id}
+                  project_id: ${tenant_project_id}
+                  status: "SUCCEEDED"
+                  compilation_name: ${compilation_name}
+                  invocation_name: ${invocation_name}
+
+        except:
+          as: e
+          steps:
+            - log_run_failure:
+                call: googleapis.bigquery.v2.jobs.query
+                args:
+                  projectId: ${admin_project_id}
+                  body:
+                    useLegacySql: false
+                    query: ${"UPDATE `" + admin_project_id + ".platform_admin.run_log` SET status = 'FAILED', dataform_compilation_id = '" + compilation_name + "', dataform_invocation_id = '" + invocation_name + "', completed_at = CURRENT_TIMESTAMP(), notes = 'Pipeline failed during execution' WHERE run_id = '" + run_id + "'"}
+                result: log_fail_res
+            - return_failure:
+                return:
+                  run_id: ${run_id}
+                  tenant_id: ${tenant_id}
+                  project_id: ${tenant_project_id}
+                  status: "FAILED"
+                  error: ${e}

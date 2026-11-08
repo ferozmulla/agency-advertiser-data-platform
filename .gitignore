@@ -1,0 +1,11 @@
+.terraform/
+*.tfstate
+*.tfstate.*
+crash.log
+*.tfvars.backup
+.terraform.lock.hcl
+__pycache__/
+*.py[cod]
+.venv/
+.pytest_cache/
+.superpowers/

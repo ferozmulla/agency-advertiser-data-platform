@@ -26,7 +26,7 @@ CREATE TABLE IF NOT EXISTS ${self()}
   budget_pacing_pct FLOAT64,
   refreshed_at TIMESTAMP
 )
-WITH CONNECTION `${dataform.projectConfig.defaultDatabase}.us-central1.lakehouse-connection`
+WITH CONNECTION `${dataform.projectConfig.vars.biglake_connection}`
 OPTIONS (
   file_format = 'PARQUET',
   table_format = 'ICEBERG',

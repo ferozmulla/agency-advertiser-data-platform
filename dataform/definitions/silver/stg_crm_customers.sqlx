@@ -21,6 +21,6 @@ SELECT
   CURRENT_TIMESTAMP() AS processed_at
 FROM ${ref("raw_crm_customers")}
 QUALIFY ROW_NUMBER() OVER (
-  PARTITION BY TRIM(customer_id)
-  ORDER BY PARSE_TIMESTAMP('%Y-%m-%dT%H:%M:%SZ', TRIM(updated_at)) DESC
+  PARTITION BY customer_id
+  ORDER BY updated_at DESC
 ) = 1

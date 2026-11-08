@@ -6,7 +6,6 @@ advertiser-02, GCS Iceberg Parquet/metadata files, and cross-tenant IAM isolatio
 
 import json
 import subprocess
-import time
 from google.cloud import bigquery, storage
 
 ADMIN_PROJECT_ID = "agency-platform-123"

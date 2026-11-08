@@ -38,15 +38,8 @@ WITH deduplicated AS (
     PARSE_TIMESTAMP('%Y-%m-%dT%H:%M:%SZ', TRIM(ingested_at)) AS ingested_at
   FROM ${ref("raw_ad_spend_daily")}
   QUALIFY ROW_NUMBER() OVER (
-    PARTITION BY PARSE_DATE('%Y-%m-%d', TRIM(report_date)), TRIM(campaign_id),
-      CASE
-        WHEN UPPER(TRIM(channel)) IN ('GOOGLE_ADS', 'GOOGLE ADS', 'GADS', 'SEARCH') THEN 'GOOGLE_ADS'
-        WHEN UPPER(TRIM(channel)) IN ('META', 'FACEBOOK', 'INSTAGRAM', 'META_ADS') THEN 'META'
-        WHEN UPPER(TRIM(channel)) IN ('TIKTOK', 'TIKTOK_ADS') THEN 'TIKTOK'
-        WHEN UPPER(TRIM(channel)) IN ('DV360', 'DISPLAY_VIDEO_360') THEN 'DV360'
-        ELSE UPPER(TRIM(channel))
-      END
-    ORDER BY PARSE_TIMESTAMP('%Y-%m-%dT%H:%M:%SZ', TRIM(ingested_at)) DESC
+    PARTITION BY report_date, campaign_id, channel
+    ORDER BY ingested_at DESC
   ) = 1
 )
 SELECT

@@ -44,6 +44,13 @@ resource "google_project_iam_member" "tenant_sa_local_roles" {
   member  = "serviceAccount:${google_service_account.tenant_dataform.email}"
 }
 
+# Allow tenant SA to submit BigQuery jobs initiated from the central Dataform repository host project (grants bigquery.jobs.create only, zero dataset access)
+resource "google_project_iam_member" "tenant_sa_admin_job_user" {
+  project = var.admin_project_id
+  role    = "roles/bigquery.jobUser"
+  member  = "serviceAccount:${google_service_account.tenant_dataform.email}"
+}
+
 # Allow central Agency Admin Dataform Service Agent to execute as this tenant's SA
 resource "google_service_account_iam_member" "admin_dataform_token_creator" {
   service_account_id = google_service_account.tenant_dataform.name
@@ -61,6 +68,12 @@ resource "google_service_account_iam_member" "admin_dataform_sa_user" {
 resource "google_service_account_iam_member" "orchestrator_sa_user" {
   service_account_id = google_service_account.tenant_dataform.name
   role               = "roles/iam.serviceAccountUser"
+  member             = "serviceAccount:${var.orchestrator_sa_email}"
+}
+
+resource "google_service_account_iam_member" "orchestrator_token_creator" {
+  service_account_id = google_service_account.tenant_dataform.name
+  role               = "roles/iam.serviceAccountTokenCreator"
   member             = "serviceAccount:${var.orchestrator_sa_email}"
 }
 

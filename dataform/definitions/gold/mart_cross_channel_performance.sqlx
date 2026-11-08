@@ -1,0 +1,47 @@
+config {
+  type: "table",
+  schema: "gold",
+  name: "mart_cross_channel_performance",
+  description: "Gold business-ready mart for cross-channel daily performance, pacing, CPA, and ROAS",
+  bigquery: {
+    partitionBy: "report_date",
+    clusterBy: ["channel", "campaign_id"]
+  },
+  assertions: {
+    uniqueKey: ["report_date", "campaign_id", "channel"],
+    nonNull: ["tenant_id", "report_date", "campaign_id", "channel", "spend_usd"]
+  }
+}
+
+WITH conversions_by_day AS (
+  SELECT
+    conversion_date AS report_date,
+    campaign_id,
+    channel,
+    COUNT(DISTINCT conversion_id) AS conversions_count,
+    ROUND(SUM(revenue_usd), 2) AS attributed_revenue_usd
+  FROM ${ref("stg_conversions")}
+  GROUP BY 1, 2, 3
+)
+SELECT
+  s.tenant_id,
+  s.report_date,
+  s.campaign_id,
+  s.campaign_name,
+  s.channel,
+  s.impressions,
+  s.clicks,
+  s.spend_usd,
+  s.daily_budget_usd,
+  COALESCE(c.conversions_count, 0) AS conversions_count,
+  COALESCE(c.attributed_revenue_usd, 0.0) AS attributed_revenue_usd,
+  ROUND(SAFE_DIVIDE(s.clicks, s.impressions), 4) AS ctr,
+  ROUND(SAFE_DIVIDE(s.spend_usd, COALESCE(c.conversions_count, 0)), 2) AS cpa_usd,
+  ROUND(SAFE_DIVIDE(COALESCE(c.attributed_revenue_usd, 0.0), s.spend_usd), 2) AS roas,
+  ROUND(SAFE_DIVIDE(s.spend_usd, s.daily_budget_usd) * 100.0, 2) AS budget_pacing_pct,
+  CURRENT_TIMESTAMP() AS refreshed_at
+FROM ${ref("stg_ad_spend_daily")} s
+LEFT JOIN conversions_by_day c
+  ON s.report_date = c.report_date
+  AND s.campaign_id = c.campaign_id
+  AND s.channel = c.channel

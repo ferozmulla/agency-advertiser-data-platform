@@ -1,0 +1,41 @@
+config {
+  type: "table",
+  schema: "gold",
+  name: "mart_customer_attribution",
+  description: "Gold privacy-safe customer attribution and LTV mart joining hashed CRM profiles with conversion touchpoints",
+  assertions: {
+    uniqueKey: ["customer_id"],
+    nonNull: ["tenant_id", "customer_id", "email_hash", "loyalty_tier"]
+  }
+}
+
+WITH customer_touchpoints AS (
+  SELECT
+    customer_id,
+    COUNT(DISTINCT conversion_id) AS total_conversions,
+    ROUND(SUM(revenue_usd), 2) AS lifetime_attributed_revenue_usd,
+    ARRAY_AGG(channel ORDER BY event_ts ASC LIMIT 1)[OFFSET(0)] AS first_touch_channel,
+    ARRAY_AGG(channel ORDER BY event_ts DESC LIMIT 1)[OFFSET(0)] AS last_touch_channel,
+    MIN(event_ts) AS first_conversion_ts,
+    MAX(event_ts) AS last_conversion_ts
+  FROM ${ref("stg_conversions")}
+  GROUP BY customer_id
+)
+SELECT
+  crm.tenant_id,
+  crm.customer_id,
+  crm.email_hash,
+  crm.phone_hash,
+  crm.loyalty_tier,
+  crm.country,
+  crm.signup_ts,
+  COALESCE(ct.total_conversions, 0) AS total_conversions,
+  COALESCE(ct.lifetime_attributed_revenue_usd, 0.0) AS lifetime_attributed_revenue_usd,
+  COALESCE(ct.first_touch_channel, 'UNATTRIBUTED') AS first_touch_channel,
+  COALESCE(ct.last_touch_channel, 'UNATTRIBUTED') AS last_touch_channel,
+  ct.first_conversion_ts,
+  ct.last_conversion_ts,
+  CURRENT_TIMESTAMP() AS refreshed_at
+FROM ${ref("stg_crm_customers")} crm
+LEFT JOIN customer_touchpoints ct
+  ON crm.customer_id = ct.customer_id

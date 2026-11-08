@@ -1,0 +1,7 @@
+config {
+  type: "declaration",
+  database: dataform.projectConfig.defaultDatabase,
+  schema: "bronze",
+  name: "raw_crm_customers",
+  description: "External BigLake table over GCS 1P CRM customers feed"
+}

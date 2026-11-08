@@ -1,0 +1,75 @@
+config {
+  type: "table",
+  schema: "silver",
+  name: "stg_ad_spend_daily",
+  description: "Cleansed, deduplicated, channel-standardized, USD-normalized daily ad spend",
+  bigquery: {
+    partitionBy: "report_date",
+    clusterBy: ["channel", "campaign_id"]
+  },
+  assertions: {
+    uniqueKey: ["report_date", "campaign_id", "channel"],
+    nonNull: ["tenant_id", "report_date", "campaign_id", "channel", "spend_usd"],
+    rowConditions: [
+      "spend_usd >= 0",
+      "impressions >= clicks"
+    ]
+  }
+}
+
+WITH deduplicated AS (
+  SELECT
+    feed_id,
+    PARSE_DATE('%Y-%m-%d', TRIM(report_date)) AS report_date,
+    TRIM(campaign_id) AS campaign_id,
+    TRIM(campaign_name) AS campaign_name,
+    CASE
+      WHEN UPPER(TRIM(channel)) IN ('GOOGLE_ADS', 'GOOGLE ADS', 'GADS', 'SEARCH') THEN 'GOOGLE_ADS'
+      WHEN UPPER(TRIM(channel)) IN ('META', 'FACEBOOK', 'INSTAGRAM', 'META_ADS') THEN 'META'
+      WHEN UPPER(TRIM(channel)) IN ('TIKTOK', 'TIKTOK_ADS') THEN 'TIKTOK'
+      WHEN UPPER(TRIM(channel)) IN ('DV360', 'DISPLAY_VIDEO_360') THEN 'DV360'
+      ELSE UPPER(TRIM(channel))
+    END AS channel,
+    CAST(impressions AS INT64) AS impressions,
+    CAST(clicks AS INT64) AS clicks,
+    CAST(spend_raw AS FLOAT64) AS spend_raw,
+    UPPER(TRIM(currency)) AS original_currency,
+    CAST(daily_budget_usd AS FLOAT64) AS daily_budget_usd,
+    PARSE_TIMESTAMP('%Y-%m-%dT%H:%M:%SZ', TRIM(ingested_at)) AS ingested_at
+  FROM ${ref("raw_ad_spend_daily")}
+  QUALIFY ROW_NUMBER() OVER (
+    PARTITION BY PARSE_DATE('%Y-%m-%d', TRIM(report_date)), TRIM(campaign_id),
+      CASE
+        WHEN UPPER(TRIM(channel)) IN ('GOOGLE_ADS', 'GOOGLE ADS', 'GADS', 'SEARCH') THEN 'GOOGLE_ADS'
+        WHEN UPPER(TRIM(channel)) IN ('META', 'FACEBOOK', 'INSTAGRAM', 'META_ADS') THEN 'META'
+        WHEN UPPER(TRIM(channel)) IN ('TIKTOK', 'TIKTOK_ADS') THEN 'TIKTOK'
+        WHEN UPPER(TRIM(channel)) IN ('DV360', 'DISPLAY_VIDEO_360') THEN 'DV360'
+        ELSE UPPER(TRIM(channel))
+      END
+    ORDER BY PARSE_TIMESTAMP('%Y-%m-%dT%H:%M:%SZ', TRIM(ingested_at)) DESC
+  ) = 1
+)
+SELECT
+  '${dataform.projectConfig.vars.tenant_id}' AS tenant_id,
+  report_date,
+  campaign_id,
+  campaign_name,
+  channel,
+  impressions,
+  clicks,
+  spend_raw,
+  original_currency,
+  ROUND(
+    spend_raw * CASE original_currency
+      WHEN 'USD' THEN 1.0
+      WHEN 'EUR' THEN 1.08
+      WHEN 'GBP' THEN 1.27
+      WHEN 'CAD' THEN 0.74
+      ELSE 1.0
+    END,
+    2
+  ) AS spend_usd,
+  daily_budget_usd,
+  ingested_at,
+  CURRENT_TIMESTAMP() AS processed_at
+FROM deduplicated

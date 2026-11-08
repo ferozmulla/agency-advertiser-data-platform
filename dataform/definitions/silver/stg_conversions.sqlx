@@ -1,0 +1,67 @@
+config {
+  type: "table",
+  schema: "silver",
+  name: "stg_conversions",
+  description: "Deduplicated 1P conversions with UTC timestamps, USD revenue, and SHA-256 hashed email",
+  bigquery: {
+    partitionBy: "conversion_date",
+    clusterBy: ["channel", "campaign_id"]
+  },
+  assertions: {
+    uniqueKey: ["conversion_id"],
+    nonNull: ["tenant_id", "conversion_id", "customer_id", "email_hash", "revenue_usd"],
+    rowConditions: [
+      "revenue_usd >= 0"
+    ]
+  }
+}
+
+WITH deduplicated AS (
+  SELECT
+    TRIM(conversion_id) AS conversion_id,
+    TRIM(customer_id) AS customer_id,
+    TO_HEX(SHA256(LOWER(TRIM(email)))) AS email_hash,
+    TRIM(campaign_id) AS campaign_id,
+    CASE
+      WHEN UPPER(TRIM(channel)) IN ('GOOGLE_ADS', 'GOOGLE ADS', 'GADS', 'SEARCH') THEN 'GOOGLE_ADS'
+      WHEN UPPER(TRIM(channel)) IN ('META', 'FACEBOOK', 'INSTAGRAM', 'META_ADS') THEN 'META'
+      WHEN UPPER(TRIM(channel)) IN ('TIKTOK', 'TIKTOK_ADS') THEN 'TIKTOK'
+      WHEN UPPER(TRIM(channel)) IN ('DV360', 'DISPLAY_VIDEO_360') THEN 'DV360'
+      ELSE UPPER(TRIM(channel))
+    END AS channel,
+    UPPER(TRIM(conversion_type)) AS conversion_type,
+    CAST(revenue_raw AS FLOAT64) AS revenue_raw,
+    UPPER(TRIM(currency)) AS original_currency,
+    PARSE_TIMESTAMP('%Y-%m-%dT%H:%M:%SZ', TRIM(event_ts)) AS event_ts,
+    PARSE_TIMESTAMP('%Y-%m-%dT%H:%M:%SZ', TRIM(ingested_at)) AS ingested_at
+  FROM ${ref("raw_conversions")}
+  QUALIFY ROW_NUMBER() OVER (
+    PARTITION BY TRIM(conversion_id)
+    ORDER BY PARSE_TIMESTAMP('%Y-%m-%dT%H:%M:%SZ', TRIM(ingested_at)) DESC
+  ) = 1
+)
+SELECT
+  '${dataform.projectConfig.vars.tenant_id}' AS tenant_id,
+  conversion_id,
+  customer_id,
+  email_hash,
+  campaign_id,
+  channel,
+  conversion_type,
+  DATE(event_ts) AS conversion_date,
+  event_ts,
+  revenue_raw,
+  original_currency,
+  ROUND(
+    revenue_raw * CASE original_currency
+      WHEN 'USD' THEN 1.0
+      WHEN 'EUR' THEN 1.08
+      WHEN 'GBP' THEN 1.27
+      WHEN 'CAD' THEN 0.74
+      ELSE 1.0
+    END,
+    2
+  ) AS revenue_usd,
+  ingested_at,
+  CURRENT_TIMESTAMP() AS processed_at
+FROM deduplicated

@@ -1,0 +1,56 @@
+config {
+  type: "operations",
+  schema: "gold",
+  name: "share_cross_channel_performance_iceberg",
+  hasOutput: true,
+  dependencies: ["mart_cross_channel_performance"],
+  description: "BigLake Managed Apache Iceberg table stored in Parquet on GCS for cross-cloud lakehouse sharing"
+}
+
+CREATE TABLE IF NOT EXISTS ${self()}
+(
+  tenant_id STRING,
+  report_date DATE,
+  campaign_id STRING,
+  campaign_name STRING,
+  channel STRING,
+  impressions INT64,
+  clicks INT64,
+  spend_usd FLOAT64,
+  daily_budget_usd FLOAT64,
+  conversions_count INT64,
+  attributed_revenue_usd FLOAT64,
+  ctr FLOAT64,
+  cpa_usd FLOAT64,
+  roas FLOAT64,
+  budget_pacing_pct FLOAT64,
+  refreshed_at TIMESTAMP
+)
+WITH CONNECTION `${dataform.projectConfig.defaultDatabase}.us-central1.lakehouse-connection`
+OPTIONS (
+  file_format = 'PARQUET',
+  table_format = 'ICEBERG',
+  storage_uri = 'gs://${dataform.projectConfig.vars.landing_bucket}/iceberg/cross_channel_performance'
+);
+
+DELETE FROM ${self()} WHERE TRUE;
+
+INSERT INTO ${self()}
+SELECT
+  tenant_id,
+  report_date,
+  campaign_id,
+  campaign_name,
+  channel,
+  impressions,
+  clicks,
+  spend_usd,
+  daily_budget_usd,
+  conversions_count,
+  attributed_revenue_usd,
+  ctr,
+  cpa_usd,
+  roas,
+  budget_pacing_pct,
+  refreshed_at
+FROM ${ref("mart_cross_channel_performance")};

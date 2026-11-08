@@ -1,0 +1,26 @@
+config {
+  type: "table",
+  schema: "silver",
+  name: "stg_crm_customers",
+  description: "Deduplicated 1P CRM customers with SHA-256 hashed PII and cleartext PII dropped",
+  assertions: {
+    uniqueKey: ["customer_id"],
+    nonNull: ["tenant_id", "customer_id", "email_hash", "phone_hash"]
+  }
+}
+
+SELECT
+  '${dataform.projectConfig.vars.tenant_id}' AS tenant_id,
+  TRIM(customer_id) AS customer_id,
+  TO_HEX(SHA256(LOWER(TRIM(email)))) AS email_hash,
+  TO_HEX(SHA256(REGEXP_REPLACE(TRIM(phone), r'[^0-9]', ''))) AS phone_hash,
+  UPPER(TRIM(loyalty_tier)) AS loyalty_tier,
+  UPPER(TRIM(country)) AS country,
+  PARSE_TIMESTAMP('%Y-%m-%dT%H:%M:%SZ', TRIM(signup_ts)) AS signup_ts,
+  PARSE_TIMESTAMP('%Y-%m-%dT%H:%M:%SZ', TRIM(updated_at)) AS updated_at,
+  CURRENT_TIMESTAMP() AS processed_at
+FROM ${ref("raw_crm_customers")}
+QUALIFY ROW_NUMBER() OVER (
+  PARTITION BY TRIM(customer_id)
+  ORDER BY PARSE_TIMESTAMP('%Y-%m-%dT%H:%M:%SZ', TRIM(updated_at)) DESC
+) = 1

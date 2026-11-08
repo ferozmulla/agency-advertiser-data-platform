@@ -1,0 +1,9 @@
+defaultProject: advertiser-01
+defaultLocation: us-central1
+defaultDataset: silver
+defaultAssertionDataset: silver
+dataformCoreVersion: 3.0.0
+vars:
+  tenant_id: advertiser_01
+  landing_bucket: advertiser-01-landing
+  biglake_connection: advertiser-01.us-central1.lakehouse-connection
